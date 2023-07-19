@@ -1,5 +1,7 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
-import 'package:html/parser.dart' show parse;
+import 'package:html/dom.dart' as dom;
 import 'package:http/http.dart' as http;
 
 void main() {
@@ -35,23 +37,60 @@ class _HomePageState extends State<HomePage> {
   String? _price = '';
   bool _isLoading = false;
 
+  var response;
+
+  final client = HttpClient();
+  String? url;
+
   Future<void> _scrapeUrl(String url) async {
     setState(() {
       _isLoading = true;
     });
 
-    final response = await http.get(Uri.parse(url));
-    if (response.statusCode == 200) {
-      final document = parse(response.body);
+    http.Request req = http.Request(
+      "Get",
+      Uri.parse(url),
+    )..followRedirects = false;
+    req.headers.addAll({
+      'User-Agent':
+          'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/44.0.2403.157 Safari/537.36',
+      'Accept-Language': 'en-US, en;q=0.5',
+    });
+    http.Client baseClient = http.Client();
+    http.StreamedResponse streamedResponse = await baseClient.send(req);
+    response = await http.Response.fromStream(streamedResponse);
+    Uri redirectUri = Uri.parse(response.headers['location'] ?? "");
 
+    while (redirectUri.toString() != "" && !redirectUri.toString().startsWith('https://www.')) {
+      http.Request req = http.Request(
+        "Get",
+        Uri.parse(redirectUri.toString()),
+      )..followRedirects = false;
+      req.headers.addAll({
+        'User-Agent':
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/44.0.2403.157 Safari/537.36',
+        'Accept-Language': 'en-US, en;q=0.5',
+      });
+      http.Client baseClient = http.Client();
+      http.StreamedResponse streamedResponse = await baseClient.send(req);
+      response = await http.Response.fromStream(streamedResponse);
+    }
+
+    print("REDIRECT: $redirectUri");
+
+    if (response.statusCode == 200) {
+      dom.Document html = dom.Document.html(response.body);
+      html.body?.attributes.forEach((key, value) {
+        print(value);
+      });
       // Extract title
-      final titleElement = document.querySelectorAll('#productTitle').map((e) => e.innerHtml.trim()).toString();
+      final titleElement = html.querySelectorAll('h1 > span').map((e) => e.innerHtml.trim()).toList();
       setState(() {
-        _title = titleElement;
+        _title = titleElement[0];
       });
 
       // Extract image
-      final imageElement = document.querySelector('img');
+      final imageElement = html.querySelector('span > span > div > img');
       if (imageElement != null) {
         setState(() {
           _image = imageElement.attributes['src'];
@@ -59,7 +98,7 @@ class _HomePageState extends State<HomePage> {
       }
 
       // Extract description
-      final descriptionElement = document.querySelector('meta[name="description"]');
+      final descriptionElement = html.querySelector('meta[name="description"]');
       if (descriptionElement != null) {
         setState(() {
           _description = descriptionElement.attributes['content'];
@@ -67,12 +106,15 @@ class _HomePageState extends State<HomePage> {
       }
 
       // Extract price
-      final priceElement = document.querySelector('.product-price');
+      final priceElement = html.querySelector(
+          '#corePrice_desktop > div > table > tbody > tr:nth-child(2) > td.a-span12 > span.a-price.a-text-price.a-size-medium.apexPriceToPay > span.a-offscreen');
       if (priceElement != null) {
         setState(() {
           _price = priceElement.text;
         });
       }
+    } else {
+      print(response.statusCode);
     }
 
     setState(() {
@@ -102,13 +144,13 @@ class _HomePageState extends State<HomePage> {
                   _image = '';
                   _description = '';
                   _price = '';
+                  url = value;
                 });
               },
             ),
             ElevatedButton(
               onPressed: () {
-                _scrapeUrl(
-                    'https://www.amazon.com/Apple-iPhone-11-64GB-Black/dp/B07ZPKN6YR?ref_=Oct_d_obs_d_7072561011_0&pd_rd_w=xGB5d&content-id=amzn1.sym.68cf20ef-f2f0-42ca-8c87-ad9617594532&pf_rd_p=68cf20ef-f2f0-42ca-8c87-ad9617594532&pf_rd_r=W07BWQKV80WS6BKXB3T2&pd_rd_wg=ky4P1&pd_rd_r=b30c9c6c-0274-43a7-8f82-9e3c7e421aeb&pd_rd_i=B07ZPKN6YR'); // Replace with your desired URL
+                _scrapeUrl(url!); // Replace with your desired URL
               },
               child: const Text('Scrape'),
             ),
@@ -121,7 +163,8 @@ class _HomePageState extends State<HomePage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text('Title: $_title'),
-                      Text('Image: $_image'),
+                      // Text('Image: $_image'),
+                      _image!.isNotEmpty ? Image.network(_image!) : const Text('Image:'),
                       Text('Description: $_description'),
                       Text('Price: $_price'),
                     ],
