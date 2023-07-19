@@ -61,7 +61,7 @@ class _HomePageState extends State<HomePage> {
     response = await http.Response.fromStream(streamedResponse);
     Uri redirectUri = Uri.parse(response.headers['location'] ?? "");
 
-    while (redirectUri.toString() != "" && !redirectUri.toString().startsWith('https://www.')) {
+    do {
       http.Request req = http.Request(
         "Get",
         Uri.parse(redirectUri.toString()),
@@ -74,7 +74,7 @@ class _HomePageState extends State<HomePage> {
       http.Client baseClient = http.Client();
       http.StreamedResponse streamedResponse = await baseClient.send(req);
       response = await http.Response.fromStream(streamedResponse);
-    }
+    } while (redirectUri.toString() != "" && !redirectUri.toString().startsWith('https://www.'));
 
     print("REDIRECT: $redirectUri");
 
