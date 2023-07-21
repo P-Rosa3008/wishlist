@@ -1,15 +1,20 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
-import 'package:html/dom.dart' as dom;
+import 'package:html/parser.dart' show parse;
 import 'package:http/http.dart' as http;
+import 'package:flutter/material.dart';
+import 'package:dio/dio.dart';
+import 'package:html/parser.dart' as htmlParser;
+import 'package:html/dom.dart' as dom;
+import 'package:cookie_jar/cookie_jar.dart';
+import 'package:dio_cookie_manager/dio_cookie_manager.dart';
+import 'dart:io';
 
 void main() {
   runApp(const ScrapingApp());
 }
 
 class ScrapingApp extends StatelessWidget {
-  const ScrapingApp({super.key});
+  const ScrapingApp({Key? key}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
@@ -24,11 +29,13 @@ class ScrapingApp extends StatelessWidget {
 }
 
 class HomePage extends StatefulWidget {
-  const HomePage({super.key});
+  const HomePage({Key? key}) : super(key: key);
 
   @override
   _HomePageState createState() => _HomePageState();
 }
+
+// final cookieJar = CookieJar();
 
 class _HomePageState extends State<HomePage> {
   String? _title = '';
@@ -37,88 +44,77 @@ class _HomePageState extends State<HomePage> {
   String? _price = '';
   bool _isLoading = false;
 
-  var response;
+  final _dio = Dio()..options.validateStatus = (status) => status != null && status >= 200 && status < 400;
 
-  final client = HttpClient();
-  String? url;
+  @override
+  void initState() {
+    super.initState();
+  }
 
   Future<void> _scrapeUrl(String url) async {
     setState(() {
       _isLoading = true;
     });
 
-    http.Request req = http.Request(
-      "Get",
-      Uri.parse(url),
-    )..followRedirects = false;
-    req.headers.addAll({
-      'User-Agent':
-          'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/44.0.2403.157 Safari/537.36',
-      'Accept-Language': 'en-US, en;q=0.5',
-    });
-    http.Client baseClient = http.Client();
-    http.StreamedResponse streamedResponse = await baseClient.send(req);
-    response = await http.Response.fromStream(streamedResponse);
-    Uri redirectUri = Uri.parse(response.headers['location'] ?? "");
+    try {
+      final response = await _dio.get(
+        url,
+        options: Options(
+          followRedirects: true,
+          headers: {
+            'User-Agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US, en;q=0.5',
+          },
+        ),
+      );
 
-    do {
-      http.Request req = http.Request(
-        "Get",
-        Uri.parse(redirectUri.toString()),
-      )..followRedirects = false;
-      req.headers.addAll({
-        'User-Agent':
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/44.0.2403.157 Safari/537.36',
-        'Accept-Language': 'en-US, en;q=0.5',
-      });
-      http.Client baseClient = http.Client();
-      http.StreamedResponse streamedResponse = await baseClient.send(req);
-      response = await http.Response.fromStream(streamedResponse);
-    } while (redirectUri.toString() != "" && !redirectUri.toString().startsWith('https://www.'));
+      if (response.statusCode == 302) {
+        final cookieJar = CookieJar();
+        final dio = Dio()
+          ..options.headers = {
+            'User-Agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US, en;q=0.5',
+            'Accept':
+                'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7'
+          }
+          ..interceptors.add(CookieManager(cookieJar))
+          ..options.followRedirects = false
+          ..options.validateStatus = (status) => status != null && status >= 200 && status < 400;
 
-    print("REDIRECT: $redirectUri");
+        final responde = await dio.get(
+          response.realUri.toString(),
+        );
 
-    if (response.statusCode == 200) {
-      dom.Document html = dom.Document.html(response.body);
-      html.body?.attributes.forEach((key, value) {
-        print(value);
-      });
-      // Extract title
-      final titleElement = html.querySelectorAll('h1 > span').map((e) => e.innerHtml.trim()).toList();
-      setState(() {
-        _title = titleElement[0];
-      });
-
-      // Extract image
-      final imageElement = html.querySelector('span > span > div > img');
-      if (imageElement != null) {
-        setState(() {
-          _image = imageElement.attributes['src'];
-        });
+        print(responde.statusCode.toString() + responde.statusMessage!);
+        print(responde.data);
       }
 
-      // Extract description
-      final descriptionElement = html.querySelector('meta[name="description"]');
-      if (descriptionElement != null) {
-        setState(() {
-          _description = descriptionElement.attributes['content'];
-        });
+      if (response.statusCode == 200) {
+        _processScrapedData(response);
       }
-
-      // Extract price
-      final priceElement = html.querySelector(
-          '#corePrice_desktop > div > table > tbody > tr:nth-child(2) > td.a-span12 > span.a-price.a-text-price.a-size-medium.apexPriceToPay > span.a-offscreen');
-      if (priceElement != null) {
-        setState(() {
-          _price = priceElement.text;
-        });
-      }
-    } else {
-      print(response.statusCode);
+    } catch (error) {
+      print('Error: $error');
     }
 
     setState(() {
       _isLoading = false;
+    });
+  }
+
+  void _processScrapedData(Response<dynamic> response) {
+    final document = htmlParser.parse(response.data);
+    final titleElement = document.querySelector('span#productTitle');
+    final imageElement = document.querySelector('img#landingImage');
+    final descriptionElement = document.querySelector('meta[name="description"]');
+    final priceElement = document.querySelector('span#price_inside_buybox');
+
+    setState(() {
+      _title = titleElement?.text.trim();
+      _image = imageElement?.attributes['data-old-hires'];
+      _description = descriptionElement?.attributes['content'];
+      _price = priceElement?.text.trim();
     });
   }
 
@@ -139,20 +135,57 @@ class _HomePageState extends State<HomePage> {
               ),
               onChanged: (value) {
                 // Reset the scraped data when the URL changes
+              },
+            ),
+            ElevatedButton(
+              onPressed: () {
                 setState(() {
                   _title = '';
                   _image = '';
                   _description = '';
                   _price = '';
-                  url = value;
                 });
+                _scrapeUrl(
+                    'https://www.amazon.com/Apple-iPhone-12-64GB-Black/dp/B08PP5MSVB/ref=sr_1_1?keywords=iphone&qid=1689802479&sr=8-1&th=1%2Frobots.txt');
               },
+              child: const Text('Scrape Amazon'),
             ),
             ElevatedButton(
               onPressed: () {
-                _scrapeUrl(url!); // Replace with your desired URL
+                setState(() {
+                  _title = '';
+                  _image = '';
+                  _description = '';
+                  _price = '';
+                });
+                _scrapeUrl('https://www.colchaoemma.pt/emmahybrid/');
               },
-              child: const Text('Scrape'),
+              child: const Text('Scrape Emma'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                setState(() {
+                  _title = '';
+                  _image = '';
+                  _description = '';
+                  _price = '';
+                });
+                _scrapeUrl('https://www.bertrand.pt/livro/debaixo-da-onda-em-waimea-paul-theroux/27218518');
+              },
+              child: const Text('Scrape Bertrand'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                setState(() {
+                  _title = '';
+                  _image = '';
+                  _description = '';
+                  _price = '';
+                });
+                _scrapeUrl(
+                    'https://www.pcdiga.com/mobilidade/smartphones-e-telemoveis/smartphones-iphone/smartphone-apple-iphone-13-6-1-128gb-meia-noite-mlpf3ql-a-194252707197');
+              },
+              child: const Text('Scrape PC Diga'),
             ),
             const SizedBox(height: 16),
             _isLoading
@@ -163,8 +196,7 @@ class _HomePageState extends State<HomePage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text('Title: $_title'),
-                      // Text('Image: $_image'),
-                      _image!.isNotEmpty ? Image.network(_image!) : const Text('Image:'),
+                      // _image!.isNotEmpty ? Image.network(_image!) : const Text('Image:'),
                       Text('Description: $_description'),
                       Text('Price: $_price'),
                     ],
